@@ -17,7 +17,7 @@ uv_mutex_t CallbackInfo::per_environment_mutex;
  * then finally free the struct.
  */
 
-void closure_pointer_cb(Env env, char *data, void *hint) {
+void closure_pointer_cb(Env env, char* data, callback_info* hint) {
   callback_info* info = static_cast<callback_info*>(hint);
   // now we can free the closure data
   info->~callback_info();
@@ -36,7 +36,7 @@ void CallbackInfo::DispatchToV8(callback_info* info, void* retval, void** parame
       "ffi fatal: callback has been garbage collected!";
 
   try {
-    if (info->function.IsEmpty()) {
+    if (info->function.IsEmpty() || info->function.Value().IsEmpty()) {
       // throw an error instead of segfaulting.
       // see: https://github.com/rbranson/node-ffi/issues/72
       if (dispatched) {
@@ -93,7 +93,7 @@ Value CallbackInfo::Callback(const Napi::CallbackInfo& args) {
   }
 
   // Args: cif pointer, JS function
-  ffi_cif* cif = args[0].As<Buffer<ffi_cif>>().Data();
+  ffi_cif* cif = GetBufferData<ffi_cif>(args[0]);
   size_t resultSize = args[1].ToNumber().Int32Value();
   int32_t argc = args[2].ToNumber();
   Function errorReportCallback = args[3].As<Function>();
@@ -140,11 +140,10 @@ Value CallbackInfo::Callback(const Napi::CallbackInfo& args) {
     throw e;
   }
 
-  return Buffer<char>::New(env,
-                           static_cast<char*>(code),
-                           sizeof(void*),
-                           closure_pointer_cb,
-                           cbInfo);
+  TypedArray ret = WrapPointer(env, code, sizeof(void*));
+  ret.ArrayBuffer().
+      AddFinalizer(closure_pointer_cb, static_cast<char*>(code), cbInfo);
+  return ret;
 }
 
 /*

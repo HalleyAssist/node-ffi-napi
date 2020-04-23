@@ -14,6 +14,8 @@
 #include <dlfcn.h>
 #endif
 
+#include "ref-napi.h"
+
 /* define FFI_BUILDING before including ffi.h because this is a static build */
 #define FFI_BUILDING
 #include <ffi.h>
@@ -26,19 +28,6 @@
 namespace FFI {
 
 using namespace Napi;
-
-/*
- * Converts an arbitrary pointer to a node Buffer with 0-length
- */
-template<typename T>
-inline Value WrapPointer(Env env, T* ptr, size_t length = 0) {
-  if (ptr == nullptr)
-    length = 0;
-  return Buffer<char>::New(env,
-                           reinterpret_cast<char*>(ptr),
-                           length,
-                           [](Env,char*){});
-}
 
 /*
  * Class used to store stuff during async ffi_call() invokations.
@@ -147,5 +136,25 @@ class ThreadedCallbackInvokation {
     uv_cond_t m_cond;
     uv_mutex_t m_mutex;
 };
+
+class InstanceData final {
+ public:
+  RefNapi::Instance* ref_napi_instance = nullptr;
+
+  static InstanceData* Get(Env env);
+};
+
+TypedArray WrapPointerImpl(Env env, char* ptr, size_t length);
+char* GetBufferDataImpl(Value val);
+
+template <typename T>
+inline TypedArray WrapPointer(Env env, T* ptr, size_t length = 0) {
+  return WrapPointerImpl(env, reinterpret_cast<char*>(ptr), length);
+}
+
+template <typename T>
+inline T* GetBufferData(Value val) {
+  return reinterpret_cast<T*>(GetBufferDataImpl(val));
+}
 
 }

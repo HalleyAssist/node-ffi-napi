@@ -4,6 +4,63 @@
 
 namespace FFI {
 
+namespace {
+napi_status napix_set_instance_data(
+    napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint) {
+  typedef napi_status (*napi_set_instance_data_fn)(
+      napi_env env, void* data, napi_finalize finalize_cb, void* finalize_hint);
+  static const napi_set_instance_data_fn napi_set_instance_data__ =
+      (napi_set_instance_data_fn)
+          get_symbol_from_current_process("napi_set_instance_data");
+
+  if (napi_set_instance_data__ == nullptr)
+    return napi_generic_failure;
+  return napi_set_instance_data__(env, data, finalize_cb, finalize_hint);
+}
+
+napi_status napix_get_instance_data(
+    napi_env env, void** data) {
+  typedef napi_status (*napi_get_instance_data_fn)(
+      napi_env env, void** data);
+  static const napi_get_instance_data_fn napi_get_instance_data__ =
+      (napi_get_instance_data_fn)
+          get_symbol_from_current_process("napi_get_instance_data");
+
+  *data = nullptr;
+  if (napi_get_instance_data__ == nullptr)
+    return napi_generic_failure;
+  return napi_get_instance_data__(env, data);
+}
+}
+
+InstanceData* InstanceData::Get(Env env) {
+  void* d = nullptr;
+  if (napix_get_instance_data(env, &d) == napi_ok) {
+    return static_cast<InstanceData*>(d);
+  }
+  return nullptr;
+}
+
+TypedArray WrapPointerImpl(Env env, char* ptr, size_t length) {
+  InstanceData* data;
+  if ((data = InstanceData::Get(env)) != nullptr) {
+    assert(data->ref_napi_instance != nullptr);
+    return TypedArray(env, data->ref_napi_instance->WrapPointer(ptr, length));
+  }
+
+  return Buffer<char>::New(env, ptr, length, [](Env,char*){});
+}
+
+char* GetBufferDataImpl(Value val) {
+  InstanceData* data;
+  if ((data = InstanceData::Get(val.Env())) != nullptr) {
+    assert(data->ref_napi_instance != nullptr);
+    return data->ref_napi_instance->GetBufferData(val);
+  }
+
+  return val.As<Buffer<char>>().Data();
+}
+
 static int __ffi_errno() { return errno; }
 
 Object FFI::InitializeStaticFunctions(Env env) {
@@ -154,10 +211,10 @@ Value FFI::FFIPrepCif(const Napi::CallbackInfo& args) {
   if (!args[3].IsBuffer())
     throw TypeError::New(env, "prepCif(): Buffer required as atypes arg");
 
-  ffi_cif* cif = args[0].As<Buffer<ffi_cif>>().Data();
+  ffi_cif* cif = GetBufferData<ffi_cif>(args[0]);
   uint32_t nargs = args[1].ToNumber();
-  ffi_type* rtype = args[2].As<Buffer<ffi_type>>().Data();
-  ffi_type** atypes = args[3].As<Buffer<ffi_type*>>().Data();
+  ffi_type* rtype = GetBufferData<ffi_type>(args[2]);
+  ffi_type** atypes = GetBufferData<ffi_type*>(args[3]);
   ffi_abi abi = static_cast<ffi_abi>(args[4].ToNumber().Int32Value());
 
   ffi_status status = ffi_prep_cif(cif, abi, nargs, rtype, atypes);
@@ -188,11 +245,11 @@ Value FFI::FFIPrepCifVar(const Napi::CallbackInfo& args) {
   if (!args[3].IsBuffer())
     throw TypeError::New(env, "prepCifVar(): Buffer required as atypes arg");
 
-  ffi_cif* cif = args[0].As<Buffer<ffi_cif>>().Data();
+  ffi_cif* cif = GetBufferData<ffi_cif>(args[0]);
   uint32_t fargs = args[1].ToNumber();
   uint32_t targs = args[2].ToNumber();
-  ffi_type* rtype = args[3].As<Buffer<ffi_type>>().Data();
-  ffi_type** atypes = args[4].As<Buffer<ffi_type*>>().Data();
+  ffi_type* rtype = GetBufferData<ffi_type>(args[3]);
+  ffi_type** atypes = GetBufferData<ffi_type*>(args[4]);
   ffi_abi abi = static_cast<ffi_abi>(args[5].ToNumber().Int32Value());
 
   ffi_status status = ffi_prep_cif_var(cif, abi, fargs, targs, rtype, atypes);
@@ -216,10 +273,10 @@ void FFI::FFICall(const Napi::CallbackInfo& args) {
     throw TypeError::New(env, "ffi_call() requires 4 Buffer arguments!");
   }
 
-  ffi_cif* cif = args[0].As<Buffer<ffi_cif>>().Data();
-  char* fn = args[1].As<Buffer<char>>().Data();
-  char* res = args[2].As<Buffer<char>>().Data();
-  void** fnargs = args[3].As<Buffer<void*>>().Data();
+  ffi_cif* cif = GetBufferData<ffi_cif>(args[0]);
+  char* fn = GetBufferData<char>(args[1]);
+  char* res = GetBufferData<char>(args[2]);
+  void** fnargs = GetBufferData<void*>(args[3]);
 
   ffi_call(cif, FFI_FN(fn), static_cast<void*>(res), fnargs);
 }
@@ -246,10 +303,10 @@ void FFI::FFICallAsync(const Napi::CallbackInfo& args) {
 
   // store a persistent references to all the Buffers and the callback function
   AsyncCallParams* p = new AsyncCallParams(env);
-  p->cif = args[0].As<Buffer<ffi_cif>>().Data();
-  p->fn = args[1].As<Buffer<char>>().Data();
-  p->res = args[2].As<Buffer<char>>().Data();
-  p->argv = args[3].As<Buffer<void*>>().Data();
+  p->cif = GetBufferData<ffi_cif>(args[0]);
+  p->fn = GetBufferData<char>(args[1]);
+  p->res = GetBufferData<char>(args[2]);
+  p->argv = GetBufferData<void*>(args[3]);
 
   p->result = FFI_OK;
   p->callback = Reference<Function>::New(args[4].As<Function>(), 1);
@@ -297,14 +354,35 @@ void FFI::FinishAsyncFFICall(uv_work_t* req, int status) {
   delete p;
 }
 
-}
+Value InitializeBindings(const Napi::CallbackInfo& args) {
+  Env env = args.Env();
 
-static Napi::Object Init(Napi::Env env, Napi::Object exports) {
-  FFI::FFI::InitializeBindings(env, exports);
-  exports["StaticFunctions"] = FFI::FFI::InitializeStaticFunctions(env);
-  exports["Callback"] = FFI::CallbackInfo::Initialize(env);
+  assert(args[0].IsExternal());
+  InstanceData* data;
+  if ((data = InstanceData::Get(env)) != nullptr)
+    data->ref_napi_instance = args[0].As<External<RefNapi::Instance>>().Data();
+
+  Object exports = Object::New(env);
+  FFI::InitializeBindings(env, exports);
+  exports["StaticFunctions"] = FFI::InitializeStaticFunctions(env);
+  exports["Callback"] = CallbackInfo::Initialize(env);
   return exports;
 }
 
-NODE_API_MODULE(ffi_bindings, Init)
+}  // namespace FFI
 
+using namespace FFI;
+
+Napi::Object BindingHook(Napi::Env env, Napi::Object exports) {
+  InstanceData* data = new InstanceData();
+  napi_status status = napix_set_instance_data(
+      env, data, [](napi_env env, void* data, void* hint) {
+        delete static_cast<InstanceData*>(data);
+      }, nullptr);
+  if (status != napi_ok) delete data;
+
+  exports["initializeBindings"] = Function::New(env, FFI::InitializeBindings);
+  return exports;
+}
+
+NODE_API_MODULE(ffi_bindings, BindingHook)
