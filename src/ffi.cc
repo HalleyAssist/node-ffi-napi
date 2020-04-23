@@ -371,17 +371,16 @@ Value InitializeBindings(const Napi::CallbackInfo& args) {
 
 }  // namespace FFI
 
-using namespace FFI;
-
 Napi::Object BindingHook(Napi::Env env, Napi::Object exports) {
-  InstanceData* data = new InstanceData();
-  napi_status status = napix_set_instance_data(
+  FFI::InstanceData* data = new FFI::InstanceData();
+  napi_status status = FFI::napix_set_instance_data(
       env, data, [](napi_env env, void* data, void* hint) {
-        delete static_cast<InstanceData*>(data);
+        delete static_cast<FFI::InstanceData*>(data);
       }, nullptr);
   if (status != napi_ok) delete data;
 
-  exports["initializeBindings"] = Function::New(env, FFI::InitializeBindings);
+  exports["initializeBindings"] =
+      Napi::Function::New(env, FFI::InitializeBindings);
   return exports;
 }
 
